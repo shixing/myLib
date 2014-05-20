@@ -1,0 +1,60 @@
+#!/usr/bin/env python
+'''
+Author: Xing Shi
+'''
+import argparse
+import sys
+
+
+def ap():
+    # argparse http://docs.python.org/2/library/argparse.html#module-argparse
+    parser = argparse.ArgumentParser(description='Add quotes or remove quotes')
+
+    # optional arguments
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument(
+        '-a', required=False, help="add a symbol both sides")
+    group.add_argument(
+        '-d',
+        required=False,
+        action='store_true',
+        help="remove any symbol both sides")
+
+    # version info
+    parser.add_argument('--version', action='version', version='%(prog)s 1.0')
+    args = vars(parser.parse_args())
+    return args
+
+
+def add(lines, s):
+    results = []
+    for ll in lines:
+        ll = ll.split()
+        results.append(' '.join([s + x + s for x in ll]))
+    return results
+
+
+def remove(lines):
+    results = []
+    for ll in lines:
+        ll = ll.split()
+        results.append(' '.join([x[1:-1] for x in ll]))
+    return results
+
+
+def main():
+    args = ap()
+
+    lines = sys.stdin.readlines()
+    lines = [x.strip() for x in lines]
+
+    if args['a']:
+        lines = add(lines, args['a'])
+    elif args['d']:
+        lines = remove(lines)
+
+    for ll in lines:
+        print ll
+
+if __name__ == '__main__':
+    main()

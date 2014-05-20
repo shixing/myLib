@@ -1,0 +1,43 @@
+#!/usr/bin/env python
+'''
+Author: Xing Shi
+'''
+import argparse
+
+
+def ap():
+    # argparse http://docs.python.org/2/library/argparse.html#module-argparse
+    parser = argparse.ArgumentParser(description='The first field of each line in file A is treated as Key. File B is a list of keys. Filter the lines of file A according to keys in file B.')
+
+    # actions:
+    # action='store_const', const=42
+    # action='store_true'
+
+    # positional arguments
+    parser.add_argument('B', default=None,  help="file B, contains keys")
+    parser.add_argument('A', default=None,  help="file A")
+    # optional arguments
+    # version info
+    parser.add_argument('--version', action='version', version='%(prog)s 1.0')
+    args = vars(parser.parse_args())
+    return args
+
+
+def main():
+    args = ap()
+    fb = open(args['B'])
+    fa = open(args['A'])
+    
+    keys = []
+    for line in fb:
+        keys.append(line.strip())
+    m = {}
+    for line in fa:
+        ll = line.strip().split()
+        m[ll[0]] = line.strip()
+    for key in keys:
+        print m[key]
+
+
+if __name__ == '__main__':
+    main()

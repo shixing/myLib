@@ -1,0 +1,429 @@
+#!/usr/bin/env python
+
+import sys
+import os
+from datetime import date
+from prettytable import PrettyTable as PT
+import traceback
+## settings ##
+
+HOME_DIR = '/Users/xingshi/.loadbalance'
+TODO_DIR = '/Users/xingshi/.todo'
+TODO_FILE = os.path.join(TODO_DIR,'todo.txt')
+AVAIL_FILE = os.path.join(HOME_DIR,'available.txt')
+TIME_FILE = os.path.join(HOME_DIR,'time.txt')
+DONE_FILE = os.path.join(HOME_DIR,'done.txt')
+## /settings ##
+
+
+def help():
+    print 'Usage: lb [s|a|do|del|l|ld|ls]'
+    print
+    print 'load balance V1.0'
+    print
+    print 'optional arguments:'
+    table = PT(['option','description'])
+    table.align['option']='l'
+    table.align['description']='l'
+    table.add_row(['s 1=5.5','Monday available time is 5 hours'])
+    table.add_row(['s 3-15=5',''])
+    table.add_row(['  2014-3-15=5','Available time for March.15 2014 is 5 hours'])
+    table.add_row(['  2014-3-15=-1','Cancel the setting for 2014-3-15'])
+    table.add_row(['a 12 3-6','Set task 12\'deadline as March.16'])
+    table.add_row(['a 12 [+30|-30|30]','Increase task 12\'estimated time 30 hours'])
+    table.add_row(['done 12','Task 12 finished'])
+    table.add_row(['del 12','Delete task 12\'s timeline'])
+    table.add_row(['do 12 4','Have worked 4 hours on Task 12'])
+    table.add_row(['l','List current dashboard'])
+    table.add_row(['l 12','List current dashboard for task 12'])
+    table.add_row(['ld','List detailed info'])
+    table.add_row(['l 12','List detailed info for task 12'])
+    table.add_row(['ls','List summary only'])
+    table.add_row(['la','List available hours info'])
+    print table
+
+## tasks
+
+def getTasks():
+    f = open(TODO_FILE)
+    tasks = {}
+    id = 1
+    for line in f:
+        tasks[id] = line.strip()
+        id += 1
+    f.close()
+    return tasks
+
+def getReverseTask():
+    tasks = getTasks()
+    r = {}
+    for key in tasks:
+        value = tasks[key]
+        r[value] = key
+    return r
+    
+
+## /task ##
+
+## timeline ##
+
+class Timeline:
+    def __init__(self):
+        self.id = -1
+        self.estimate = 0
+        self.done = 0
+        self.deadline = date.today()
+
+    def parse(self,s,r):
+        ss = s.split()
+        self.id = int(ss[0])
+        self.estimate = float(ss[1])
+        self.done = float(ss[2])
+        d = getTime(ss[3])
+        if d< date.today():
+            d = date.today()
+        self.deadline = d
+        ss = s.strip().split('_#TEXT#_')
+        text=ss[1]
+        if not text in r:
+            return False
+        self.id = r[text]
+        self.text = text
+        return True
+    
+    def toString(self):
+        return '%d %.1f %.1f %s _#TEXT#_%s' % (self.id,self.estimate,self.done,getTimeString(self.deadline), self.text)
+
+    def statistic(self):
+        l = []
+        l.append('%d' % self.id)
+        l.append(getTimeString(self.deadline))
+        t = date.today()
+        delta = self.deadline - t
+        l.append(str(delta.days))
+        l.append('%.1f/%.1f' % (self.estimate-self.done, self.estimate))
+        if self.estimate == 0:
+            l.append('%.2f' % (0.0))
+        else:
+            l.append('%.2f' % (self.done/self.estimate))
+        delta2 = delta.days
+        if delta2 == 0:
+            delta2 = 1
+        l.append('%.1f' % ((self.estimate-self.done)/delta2))
+        return l
+        
+
+def getTimeline():
+    r = getReverseTask()
+    f = open(TIME_FILE)
+    timeline = {}
+    for line in f:
+        tl = Timeline()
+        success = tl.parse(line,r)
+        if success:
+            timeline[tl.id] = tl
+    f.close()
+    return timeline
+
+def writeTimeline(timeline):
+    f = open(TIME_FILE,'w')
+    for key in timeline:
+        tl = timeline[key]
+        f.write(tl.toString()+'\n')
+    f.close()
+
+def setTimeline(args,done=False):
+    timeline = getTimeline()
+    tasks = getTasks()
+    report = ''
+    id = int(args[0])
+    if not id in tasks:
+        print 'Error: id is not in task!'
+        sys.exit(-1)
+    if not id in timeline:
+        tl = Timeline()
+        tl.id = id
+        tl.text = tasks[tl.id]
+        timeline[id] = tl 
+    if getTime(args[1]):
+        d = getTime(args[1])
+        if d < date.today():
+            error(3)
+        timeline[id].deadline = d
+        report = 'Set Task-%d deadline as %s.' % (id,getTimeString(d)) 
+    else: # set estimate
+        est = float(args[1])
+        if done:
+            timeline[id].done += est
+            report = 'Have worked on Task-%d %.1f hours' % (id,est)
+        else:
+            if args[1][0] == '+' or args[1][0] == '-':
+                timeline[id].estimate += est
+            else:
+                timeline[id].estimate = est
+            report = 'Set Task-%d estimated time as %.1f hours' % (id,timeline[id].estimate)    
+    writeTimeline(timeline)
+    print report
+
+def listTimeline(id,detail):
+    timeline = getTimeline()
+    tasks = getTasks()
+    columns = ['ID','DUE','Days','R/T','%','PRESSURE']
+    if detail:
+        columns.append('DETAIL')
+    table = PT(columns)
+    if id != -1: 
+        if not id in timeline:
+            error(2)
+        row = timeline[id].statistic()
+        if detail:
+            row.append(tasks[id])
+        table.add_row(row)
+    else: # list all 
+        l = []
+        for key in timeline:
+            l.append((key,timeline[key].deadline))
+        l = sorted(l,key = lambda x:x[1])
+        for key,deadline in l:
+            row = timeline[key].statistic()
+            if detail:
+                row.append(tasks[key])
+            table.add_row(row)
+    print table
+    print '--'
+    listSummary()
+    
+def listSummary():
+    tasks = getTasks()
+    avail = getAvailable()
+    timeline = getTimeline()
+    
+    dates = [timeline[x].deadline for x in timeline]
+    today = date.today()
+    delta = date(2014,1,2)-date(2014,1,1)
+    yesterday = today-delta
+    dates.append(yesterday)
+    dates = sorted(dates)
+    loading = [0.0] * (len(dates)-1)
+    own = {}
+    for key in timeline:
+        tl = timeline[key]
+        due = tl.deadline
+        est = tl.estimate
+        done = tl.done
+        if not due in own:
+            own[due] = 0
+        own[due] += est-done
+    own[yesterday] = 0.0
+    for i in xrange(len(dates)-2,-1,-1):
+        nextDue = dates[i+1]
+        currentDue = dates[i]
+        span = getSpan(currentDue,nextDue)
+        c = own[nextDue] - span
+        if c > 0 : 
+            own[currentDue] += c
+            loading[i] = (span,span)
+        else:
+            loading[i] = (own[nextDue],span)
+
+    table = PT(['Time','Balance','R/T','Loading_Ratio','# Days'])
+    for i in xrange(len(loading)):
+        row = []
+        if i == 0:
+            row.append('Today->%s' % getTimeString(dates[1],True))
+            balance = loading[0][1] - own[dates[1]]
+            row.append('%.1f' % balance)
+            row.append('%.1f/%.1f' % (own[dates[1]], loading[0][1]))
+            row.append('%.2f' % (own[dates[1]]/loading[0][1]))
+        else:
+            row.append('%s --> %s' % (getTimeString(dates[i],True),getTimeString(dates[i+1],True)))
+            row.append('-')
+            row.append('%.1f/%.1f' % (loading[i][0],loading[i][1]))
+            row.append('%.2f' % (loading[i][0]/loading[i][1]))
+        row.append(str((dates[i+1]-dates[i]).days))
+        table.add_row(row)
+    print table
+
+
+
+def getSpan(start,end):
+    avail = getAvailable()
+    delta = date(2014,1,2) - date(2014,1,1)
+    current = start + delta
+    sum = 0.0
+    while True:
+        if current > end:
+            break
+        a = 0.0
+        if current in avail:
+            a = avail[current]
+        else:
+            i = current.isoweekday()
+            a = avail[i]
+        sum += a
+        current = current + delta
+    return sum
+
+def delTimeline(idstr):
+    id = int(idstr)
+    timeline = getTimeline()
+    if id in timeline:
+        del timeline[id]
+    writeTimeline(timeline)
+
+## available ##
+
+def getAvailable():
+    f = open(AVAIL_FILE)
+    avail = {}
+    for line in f:
+        ll = line.split()
+        if len(ll[0]) == 1 and ll[0] in '1234567':
+            avail[int(ll[0])] = float(ll[1])
+        else:
+            d = getTime(ll[0])
+            today = date.today()
+            if d >= today:
+                avail[d] = float(ll[1])
+    f.close()
+    for i in xrange(1,8):
+        if not i in avail:
+            avail[i] = 0.0
+    return avail
+
+
+def writeAvailable(avail):
+    f = open(AVAIL_FILE,'w')
+    for key in avail:
+        fs = '%.1f' % avail[key]
+        if type(key) is int:
+            f.write(str(key)+' '+fs+'\n')
+        elif type(key) == type(date.today()):
+            f.write(getTimeString(key) + ' ' + fs + '\n')
+    f.close()
+
+def setAvailable(args):
+    report= ''
+    avail = getAvailable()
+    aa = args[0].split('=')
+    if len(aa[0]) == 1 and aa[0] in '1234567':
+        di = int(aa[0])
+        avail[di] = float(aa[1])
+        report = 'Set %s available time as %.1f hours' % (getWeekday(di),float(aa[1]))
+    else:
+        d = getTime(aa[0])
+        est = float(aa[-1])
+        if est == -1:
+            del avail[d]
+            report = 'Remove %s available time setting!' % (getTimeString(d))
+        else:
+            avail[d] = float(aa[1])
+            report = 'Set %s available time as %.1f hours' % (getTimeString(d),float(aa[1]))
+    print report
+    writeAvailable(avail)
+    listAvailable()
+
+def listAvailable():
+    avail = getAvailable()
+    table = PT(['Date','Available Hours'])
+    for i in range(1,8):
+        d = getWeekday(i)
+        hour = '%.1f' % avail[i]
+        table.add_row([d,hour])
+    dates = []
+    for key in avail:
+        if type(key) is int:
+            continue
+        dates.append((key,avail[key]))
+    dates = sorted(dates,key= lambda x: x[0])
+    for d,hour in dates:
+        table.add_row([d,hour])
+    print table
+
+def getWeekday(i):
+    days = ['MON','TUE','WED','THU','FRI','SAT','SUN']
+    return days[i-1]
+
+## /available ##
+
+
+def getTime(s):
+    ss = s.split('-')
+    ss = [int(x) for x in ss]
+    if len(ss)<2 or len(ss)>3:
+        return None
+    elif len(ss) == 2:
+        year = date.today().year
+        return date(year,ss[0],ss[1])
+    elif len(ss):
+        return date(ss[0],ss[1],ss[2])
+
+
+def getTimeString(t,short=False):
+    if short:
+        return '%d-%d' % (t.month,t.day)
+    else:
+        return '%d-%d-%d' % (t.year,t.month,t.day)
+
+
+
+def init():
+    if not os.path.exists(HOME_DIR):
+        os.makedirs(HOME_DIR)
+
+    for fn in [AVAIL_FILE,DONE_FILE,TIME_FILE]:
+        if not os.path.exists(fn):
+            f=open(fn,'w')
+            f.close()
+
+def error(eid):
+    if eid == 1:
+        print 'Task ID is not in todo.txt'
+    elif eid == 2:
+        print 'Task is not in Timeline'
+    elif eid == 3:
+        print 'Deadline is before Today!'
+    sys.exit(-1)
+
+def main():
+    init()
+    if len(sys.argv) == 1:
+        help()
+        return
+    args = sys.argv[1:]
+    if args[0] == 'h':
+        help()
+    elif args[0] == 's':
+        setAvailable(args[1:])
+    elif args[0] == 'a':
+        setTimeline(args[1:])
+    elif args[0] == 'do':
+        setTimeline(args[1:],True)
+    elif args[0] == 'done' or args[0] == 'del':
+        delTimeline(args[1])
+    elif args[0] == 'l':
+        id = -1
+        if len(args) > 1:
+            tasks = getTasks()
+            id = int(args[0])
+            if not id in tasks:
+                error(1)
+        listTimeline(id,False)
+    elif args[0] == 'ld':
+        id = -1
+        if len(args) > 1:
+            tasks = getTasks()
+            id = int(args[0])
+            if not id in tasks:
+                error(1)
+        listTimeline(id,True)
+    elif args[0] == 'ls':
+        listSummary()
+    elif args[0] == 'la':
+        listAvailable()
+    else:
+        help()
+        
+
+if __name__ == '__main__':
+    main()

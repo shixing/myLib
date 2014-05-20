@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# usage:
+# myclean dir_path
+# clean all files with ~ #
+echo 'Cleaning:', $1
+FILES=`find $1/. | grep '~' `
+FILES1=`find $1/. | grep '#' `
+for f in $FILES; do
+echo $f
+done;
+
+for f in $FILES1; do
+echo $f
+done;
+
+echo 'Delete all these files? y/[n]'
+read input_variable
+if [ $input_variable == 'y' ];then
+    rm $FILES
+    rm $FILES1
+fi

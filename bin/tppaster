@@ -1,0 +1,44 @@
+#!/usr/bin/env python
+'''
+Author: Xing Shi
+'''
+import argparse
+import sys
+
+def ap():
+    # argparse http://docs.python.org/2/library/argparse.html#module-argparse
+    parser = argparse.ArgumentParser(description='reverse of paste')
+
+    # actions:
+    # action='store_const', const=42
+    # action='store_true'
+
+    # positional arguments
+    # optional arguments
+    parser.add_argument(
+        '-f', '--files',nargs='+' , required=True, help="file names")
+    # version info
+    parser.add_argument('--version', action='version', version='%(prog)s 1.0')
+    args = vars(parser.parse_args())
+    return args
+
+
+def main():
+    args = ap()
+    fns = args['files']
+    fs = [open(fn,'w') for fn in fns]
+    i = 0 
+    lines = sys.stdin.readlines()
+    for line in lines:
+        k = i % len(fs)
+        f = fs[k]
+        f.write(line)
+        i+=1
+    for f in fs:
+        f.close()
+
+
+
+
+if __name__ == '__main__':
+    main()
