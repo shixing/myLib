@@ -16,3 +16,8 @@ Copyright (c) 2004 onward  Yusuke Shinyama <yusuke at cs dot nyu dot edu>
 
 ### bin
 A frequently used command line tools, including text preprocessing, multiprocessing, personal task load balance and other tools.
+
+### nginx
+
+#### base
+a base example which shows how to serve static files.
