@@ -1,0 +1,7 @@
+from fs.memoryfs import MemoryFS
+
+mfs = MemoryFS()
+f = mfs.open('test.mp3','wb')
+f.write('...')
+f.close()
+

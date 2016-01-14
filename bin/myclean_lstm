@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+# usage:
+# myclean_lstm dir_path
+
+echo 'Cleaning:', $1
+DIRS=`find $1/. | grep '[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}-[0-9a-f]\{4\}$' `
+
+for f in $DIRS; do
+echo $f
+done;
+
+echo 'Delete all these files? y/[n]'
+read input_variable
+if [ $input_variable == 'y' ];then
+    rm -rf $DIRS
+fi

@@ -1,0 +1,488 @@
+#!/usr/bin/env perl
+# 
+use 5.006;
+use strict;
+use File::Spec;
+use Getopt::Long qw(:config bundling no_ignore_case);
+use Data::Dumper;
+
+sub usage;			# { }
+
+my ($user,$match);
+my $summary = 0;
+my $debug = 0;
+my $verbose = 0;
+GetOptions( 'help|h' => \&usage, 
+	    'user|u:s' => sub {
+		$user = length($_[1]) ? $_[1] : scalar getpwuid($>);
+	    },
+	    'debug|d=i' => \$debug,
+	    'match|m=s' => \$match,
+	    'verbose|v+' => \$verbose,
+	    'summary|s' => sub { $summary |= 1 },
+	    'totals|t' => sub { $summary |= 2 },
+	    ) || die "Getoptions";
+
+sub trim($) {
+    my $s = shift;
+    $s =~ s/^\s+//;
+    $s =~ s/\s+$//;
+    $s;
+}   
+
+sub parse_status($) {
+    my $s = shift;
+    my (@m,$a,$e);
+    $a=0;
+    while ( ($a=index($s,'[',$a)) > -1 && ($e=index($s,']',$a)) > -1 ) {
+	push( @m, [ $a, $e, substr($s,$a,$e-$a) ] );
+	substr( $s, $a, $e-$a ) =~ s{\s}{_}g;
+	substr( $s, $a, $e-$a ) =~ s{,}{!}g;
+	$a=$e+1;
+    }
+
+    ( map { split /\s*=\s*/,$_ } split /,/,$s );
+}
+
+sub verbose_host($;$$) {
+    # purpose: verbose display of what is going on remotely
+    # paramtr: $host (IN): which host
+    #          $cols (opt. IN): terminal width, default 80
+    #          $user (opt. IN): user to list, default self
+    #
+    my $host = shift;
+    my $cols = shift || 80;
+    my $user = shift || scalar getpwuid($>);
+    if ( open( SSH, "ssh -x -a $host \'ps aux\'|" ) ) {
+	$cols -= 3;
+	print( '   ', scalar(<SSH>) ) if $verbose > 1;
+	while ( <SSH> ) {
+	    next unless /^$user\s/;
+	    next if /\ssshd: $user\@notty$/;
+	    next if /\sps aux$/;
+	    chomp;
+	    print '   ', substr( $_, 0, $cols ), "\n";
+	}
+	close SSH;
+    }
+    print "\n";
+}
+
+# for David
+$ENV{PATH} = '/usr/bin:' . $ENV{PATH};
+
+#
+# pbsnodes
+#
+my $cacheit = 1;
+my $cachefn = File::Spec->catfile($ENV{HOME},'.pbsnodes_cache');
+
+if ( ! -e $cachefn || -M $cachefn > 0.000695 ) { # 1 minute
+    warn "# using original pbsnodes output\n" if $verbose;
+    open( Q, "pbsnodes -a|" ) || die "pbsnodes: $!\n";
+    open( C, ">$cachefn" ) || die "open $cachefn: $!\n";
+} else {
+    warn "# using cached pbsnodes copy\n" if $verbose;
+    open( Q, "<$cachefn" ) || die "open $cachefn: $!\n";
+    $cacheit = 0;
+}
+
+my %q = ( @ARGV == 0 ? 
+	  ( exists $ENV{'NEWQF_Q'} ? 
+	    ( map { $_ => 1 } split(/[ ,:]/, $ENV{'NEWQF_Q'}) ) : 
+	    ( isi => 1 ) ) : 
+	  ( map { $_ => 1 } @ARGV ) );
+
+# add _exe variants for all but main,quick,large
+my @k = keys(%q);
+foreach ( @k ) { if (! /^(main|quick|large)$/) { $q{$_ . "_exe"} = 1 }; }
+# add _IB variants
+foreach ( @k ) { { $q{$_ . "_IB"} = 1 }; }
+
+my $keeper = $/;
+local $/ = "";
+my ($host,%x,$k,$v);
+while ( <Q> ) {
+    print C $_ if $cacheit; 
+    foreach ( split /[\r\n]/, $_ ) {
+	print STDERR "# $_\n" if ( $debug & 0x01 );
+	if ( /^\s+/ ) {
+	    s/^\s+//;
+	    ($k,$v) = split / = /, $_;
+	    if ( $k eq 'properties' ) {
+		$x{$host}{$k} = { map { $_ => 1 } split /,/, $v };
+	    } elsif ( $k eq 'status' ) {
+		$x{$host}{$k} = { parse_status($v) };
+	    } elsif ( $k eq 'state' ) {
+		$x{$host}{$k} = { map { trim($_) => 1 } split /,/, $v };
+	    } elsif ( $k eq 'jobs' || index( $v, ',' ) >= 0 ) {
+		$x{$host}{$k} = [ map { trim($_) } split /,/, $v ];
+	    } else {
+		$x{$host}{$k} = $v;
+	    }
+	} else {
+	    $host = $_;
+	}
+    }
+}
+close Q;
+close C if $cacheit;
+
+print STDERR Data::Dumper->Dump( [\%x], [qw(%x)] )
+    if ( $debug & 0x02 );
+
+sub parse_hours($) {
+    local $_ = shift;
+    ( /(\d+):(\d+)/ ) ? $1 * 60 + $2 : 0 ;
+}
+
+sub format_minutes($) {
+    my $x = shift;
+    sprintf '%d:%02d', $x / 60, $x % 60;
+}
+
+sub guess_arch {
+    my $arch = '';
+    my %x = %{shift()};
+    foreach my $try ( qw(i686 x86_64) ) {
+	$arch=$try if exists $x{$try};
+	last if $arch;
+    }
+    $arch;
+}
+
+sub guess_jobs {
+    my $r = shift;
+    my @x = ();
+    if ( defined $r && ref $r eq 'ARRAY' ) {
+	my %x = ();
+	foreach ( @{$r} ) {
+	    $x{$1} = 1 if m{^(?:\d+\/)?(\d+)};
+	}
+	@x = sort { $a <=> $b } keys %x;
+    }
+    wantarray ? @x : $x[0];
+}
+
+sub usage {
+    print << "EOF";
+Correlates PBS nodes and PBS users, different output in plain, -s and -t mode.
+
+Usage: qf [options] [queue(s)]
+
+Options:
+ -h|--help     this help.
+ -s|--summary  summarize queue users
+ -t|--totals   just print queue totals.
+ -u|--user u   only print for user u. If u is omitted, use euid.
+ -v|--verbose  in regular or user mode, list remote user processes.
+               Warning: The verbose option will make things very slow. 
+ -m|--match re restricts verbose output to jobs where re matches JOBNAME
+
+Columns in plain mode: 
+  HOST           HPC machine the job runs on. ! means broken machine.
+  Q              The queue this job is associated with (usually \"isi\"). 
+  ARCH           The node\'s architecture. 
+  CPU            The number of cores in the given node. 
+  JOBID          The PBS job identification number (for qdel etc.).
+  MEMORY-LAYOUT  The total (vmem), available, and physical (pmem) memory.
+  LOAD           The current load average of the machine. 
+  S              The number of sessions on the machine.
+  U              The number of users on the machine.
+  JOBUSER        The account the job is associated with (and billed to). 
+  ELAPSE         The duration, wall seconds, the job has used so far. 
+  DONE           The percentage time used regarding the declared duration. 
+  JOBNAME        In wide enough terminal, the declared name of the job.
+
+EOF
+    exit(1); 
+}
+
+#
+# determine terminal size
+#
+my ($rows,$cols) = ( ($ENV{LINES} || 25), ($ENV{COLUMNS} || 80) );
+if ( -t STDOUT ) {
+    my $x;
+    eval {
+	require "sys/ioctl.ph";
+	ioctl( STDOUT, &TIOCGWINSZ, $x ) || die "ioctl";
+    };
+    if ( ! $@ && defined $x && length($x) ) {
+	($rows,$cols) = unpack("S2",$x);
+	warn "# $cols x $rows terminal actively detected\n" if $verbose;
+    }
+} else {
+    $rows = $cols = 1E10;	# unlimited
+}
+
+#
+# qstat
+#
+$cacheit = 1;
+$cachefn = File::Spec->catfile($ENV{HOME},'.qshow_cache');
+if ( ! -e $cachefn || -M $cachefn > 0.000695 ) { # 1 minute
+    warn "# using original qstat output\n" if $verbose;
+    open( Q, "qstat -a|" ) || die "qstat: $!\n";
+    open( C, ">$cachefn" ) || die "open $cachefn: $!\n";
+} else {
+    warn "# using cached qstat copy\n" if $verbose;
+    open( Q, "<$cachefn" ) || die "open $cachefn: $!\n";
+    $cacheit = 0;
+}
+
+my (@x,%job,$jobid,%home);
+$/ = $keeper;
+while ( <Q> ) {
+    print C $_ if $cacheit; 
+    next unless /^(\d+)\.hpc/;
+    $jobid=$1;
+    chomp;
+    print STDERR "# $_\n" if ( $debug & 0x04 );
+    @x = split;
+    $job{$jobid} = { user => $x[1],
+		     queue => $x[2],
+		     name => $x[3],
+		     ncpus => $x[5],
+		     rtime => parse_hours($x[8]),
+		     state => $x[9],
+		   };
+    $job{$jobid}{queue} =~ s/_exe$//;  #fix?
+
+    if ( $x[9] eq 'R' ) {
+	my $t = parse_hours($x[10]);
+	$job{$jobid}{etime} = $t;
+	$job{$jobid}{rtime} ||= 1;
+	$job{$jobid}{ratio} = (100.0 * $t) / $job{$jobid}{rtime};
+    }
+
+    # new: see, if this could be a "qs" job? 
+    if ( $cols > 92 && $job{$jobid}{name} =~ /[A-Z]{3}\.[[:alnum:]]{6}/ ) {
+	my $user = $job{$jobid}{user};
+	my (@x,$home);
+	if ( exists $home{$user} ) {
+	    $home = $home{$user};
+	} else {
+	    $home = $home{$user} = (getpwnam($user))[7];
+	}
+	if ( -d $home && -r _ ) {
+	    my $fn = File::Spec->catfile( $home, 'qsub', 'tmp', 'jobs', 
+					  $job{$jobid}{name} );
+	    if ( open( J, "<$fn" ) ) {
+		chomp( @x = <J> );
+		close J;
+		$job{$jobid}{cmd} = $x[$#x];
+	    }
+	}
+    }
+}
+close Q;
+close C if $cacheit;
+
+print STDERR Data::Dumper->Dump( [\%job], [qw(%job)] )
+    if ( $debug & 0x08 );
+
+#
+# output
+#
+my ($skip,@flag,%s,%sum,$job,$down,$offline);
+my $w = 0;
+foreach ( keys %q ) { $w -= (length($_)+1) }
+$w = -12 if ( $w < -12 );
+
+if ( $summary == 0 || $summary == 2 ) {
+    printf( "HOST     %*s ARCH   CPUS %8s MEMORY-LAYOUT LOAD S U %8s ELAPSE DONE%s\n", 
+	    $w, 'Q', 'JOBID', 'JOBUSER', ( $cols>92 ? ' JOBNAME' : '' ) ) 
+	unless ( $summary );
+    foreach my $host ( sort keys %x ) {
+	# determine the right queues
+	@flag = ();
+	$skip = 0;
+	foreach my $q ( keys %q ) {
+	    push( @flag, $q ) if exists $x{$host}{properties}{$q};
+	}
+	next unless @flag;
+
+	# show host
+	%s = ();
+	%s = %{$x{$host}{status}} if exists $x{$host}{status};
+	$s{ncpus} = $x{$host}{np} unless exists $s{ncpus};
+	$s{arch} = guess_arch($x{$host}{properties}) unless exists $s{arch};
+	if ($x{$host}{jobs}) { $s{jobs} = guess_jobs($x{$host}{jobs}); } # this is more reliable than status
+	$down = exists $x{$host}{state}{down};
+	$offline = exists $x{$host}{state}{offline};
+
+	#if ( ! defined $s{jobs} ) {
+	if ( $s{jobs} eq '? 0' or ! defined $s{jobs} ) {
+	    $s{truestate} = $offline ? 'offline' : ( $down ? 'down' : 'free' );
+	    $job = 0;
+	    $s{userlist} = '';
+	    $skip=1 if ( defined $user );
+	} else {
+	    $s{truestate} = $offline ? 'offline' : ( $down ? 'down' : 'busy' );
+	    $job = $s{jobs} + 0;	# buh
+	    $s{userlist} = $job{$job}{user} || '(n.a.)'; # 
+	    $skip=1 if ( defined $user && $job{$job}{user} ne $user );
+
+	    # fix queue
+	    @flag = ( $job{$job}{queue} )
+		if defined $job{$job}{queue};
+	}
+
+	if ( ! $skip && ! $summary ) {
+	    my $ch = ( $offline || $down ) ? '!' : ':';
+	    printf "$host$ch %*s", $w, substr( join(' ',@flag), 0, abs($w) );
+	    printf " %6s x %-2d", $s{arch}, $s{ncpus};
+	    printf " %8s", $job || $s{truestate};
+	    my $mem = sprintf( "%.1f/%.1f/%.1fGB", 
+			       $s{totmem}/1048576.0, 
+			       $s{availmem}/1048576.0, 
+			       $s{physmem}/1048576.0 );
+	    my $over = length($mem) - 13; # default length
+	    printf " $mem %.2f", $s{loadave};
+	    printf " %d %d %-8s", $s{nsessions}, $s{nusers}, $s{userlist};
+	    if ( $s{truestate} eq 'busy' || ( $offline && defined $job ) ) {
+		printf " %6s", format_minutes($job{$job}{etime});
+		printf " %3.0f%%", $job{$job}{ratio};
+	    }
+	    if ( $cols > 92 ) {
+		print ' ', $job{$job}{name};
+		if ( exists $job{$job}{cmd} ) {
+		    my $w = $cols - 92 - $over;
+		    my $s = $job{$job}{cmd};
+		    substr($s,$w) = '..' if length($s) > $w;
+		    print ' ', $s;
+		}
+	    }
+	    print "\n";
+
+	    # NEW: verbose mode
+	    if ( $verbose && $user ) {
+		if ( defined $match ) {
+		    verbose_host( $host, $cols, $user )
+			if ( $job{$job}{name} =~ /$match/ );
+		} else {
+		    verbose_host( $host, $cols, $user );
+		}
+	    }
+	}
+
+	$sum{$s{arch}}{$s{ncpus}}{$s{truestate}}++;
+    }
+
+    %s = ();
+    $job = 0;
+    foreach my $arch ( keys %sum ) {
+	foreach my $ncpus ( keys %{$sum{$arch}} ) {
+	    my $sum = $sum{$arch}{$ncpus}{free} + 
+		$sum{$arch}{$ncpus}{busy} +
+		$sum{$arch}{$ncpus}{offline} +
+		$sum{$arch}{$ncpus}{down};
+	    printf( "%6s x %-2d: %3d x free + %3d x busy + %3d x offline + %3d x down = %3d total\n", 
+		    $arch, $ncpus,
+		    $sum{$arch}{$ncpus}{free},
+		    $sum{$arch}{$ncpus}{busy},
+		    $sum{$arch}{$ncpus}{offline},
+		    $sum{$arch}{$ncpus}{down},
+		    $sum );
+	    $s{free} += $sum{$arch}{$ncpus}{free};
+	    $s{busy} += $sum{$arch}{$ncpus}{busy};
+	    $s{offline} += $sum{$arch}{$ncpus}{offline};
+	    $s{down} += $sum{$arch}{$ncpus}{down};
+	    $s{sum} += $sum;
+	    $job++;
+	}
+    }
+
+    if ( $job > 1 ) {
+	my $x = '-' x 10;
+	printf( "$x-  $x   $x   $x---   $x\n" );
+	printf( "%11s: %3d x free + %3d x busy + %3d x offline + %3d x down = %3d total\n", 
+		"$job ARCH", $s{free}, $s{busy}, $s{offline}, $s{down}, $s{sum} );
+    }
+} elsif ( $summary == 1 ) {
+    # $summary == 1
+    my (%user,$arch,%arch,%run);
+    foreach my $host ( sort keys %x ) {
+	# determine the right queues
+	@flag = ();
+	foreach my $q ( keys %q ) {
+	    push( @flag, $q ) if exists $x{$host}{properties}{$q};
+	}
+	next unless @flag;
+
+	# show host
+	%s = ();
+	%s = %{$x{$host}{status}} if exists $x{$host}{status};
+	$s{ncpus} = $x{$host}{np} unless exists $s{ncpus};
+	$s{arch} = guess_arch($x{$host}{properties}) 
+	    unless exists $s{arch};
+	if ($x{$host}{jobs}) { $s{jobs} = guess_jobs($x{$host}{jobs}); } # this is more reliable than status
+	$down = exists $x{$host}{state}{down};
+	$offline = exists $x{$host}{state}{offline};
+
+#	$arch = $s{arch} . ' x ' . sprintf( "%-2d", $s{ncpus} );
+	$arch = 'x ' . sprintf( "%2d", $s{ncpus} );
+	$arch{$arch}++;
+	if ( $offline ) {
+	    $user{'__offline'}{$arch}++;
+	} elsif ( $down ) {
+	    $user{'__down'}{$arch}++;
+	} elsif ( $s{jobs} eq '? 0' or ! defined $s{jobs} ) {
+	    $user{'__free'}{$arch}++;
+	} else {
+	    $job = $s{jobs} + 0;	# buhu
+	    $s{userlist} = $job{$job}{user} || '(n.a.)';
+	    $run{$s{userlist}} = 1; # remember
+	    $user{$s{userlist}}{$arch}++;
+	}
+    }
+
+    my %mapit = ( Q => '__queued', H => '__held' );
+    foreach my $jobid ( keys %job ) {
+	next unless ( $job{$jobid}{state} eq 'Q' ||
+		      $job{$jobid}{state} eq 'H' );
+	next unless exists $q{$job{$jobid}{queue}};
+#	if ( exists $run{$job{$jobid}{user}} ) {
+	if ( 1 ) {
+	    my $localstate = $mapit{ $job{$jobid}{state} };
+	    $user{$job{$jobid}{user}}{$localstate} += $job{$jobid}{ncpus};
+	}
+    }
+
+#    printf "%8s", '';
+#    foreach $arch ( sort keys %arch ) {
+#	printf " %10s", $arch;
+#    }
+#    printf " %10s\n", 'SUM';
+
+    foreach my $user ( sort keys %user ) {
+	next if substr($user,0,2) eq '__';
+	printf "%8s", $user;
+	my $sum = 0;
+	foreach $arch ( sort keys %arch ) {
+	    $user{$user}{$arch} += 0;
+	    printf " %5d %s", $user{$user}{$arch}, $arch;
+	    $sum += $user{$user}{$arch};
+	    $user{__total}{$arch} += $user{$user}{$arch};
+	}
+	printf( " %5d TOTAL", $sum );
+	printf( " %5d queued", $user{$user}{'__queued'} )
+	    if exists $user{$user}{'__queued'};
+	printf( " %5d held", $user{$user}{'__held'} )
+	    if exists $user{$user}{'__held'};
+	print "\n";
+    }
+
+    foreach my $user ( qw(__free __offline __down __total) ) {
+	printf "%8s", uc substr($user,2);
+	my $sum = 0;
+	foreach $arch ( sort keys %arch ) {
+	    $user{$user}{$arch} += 0;
+	    printf " %5d %s", $user{$user}{$arch}, $arch;
+	    $sum += $user{$user}{$arch};
+	    $user{__total}{$arch} += $user{$user}{$arch};
+	}
+	printf " %5d TOTAL\n", $sum;
+    }
+}
