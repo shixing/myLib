@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# usage:
+# xgrep "a" "b" -v "c" "d"
+# == grep 'a' | grep 'b' | grep -v "c" | grep -v "d"
+
+cmd=""
+tmp="grep"
+n=$#
+for i in $@; do 
+    if [ ${i} == '-v' ]; then
+       tmp="grep -v"
+       continue
+    fi 
+    cmd="$cmd $tmp $i"
+    if [ $i != ${!n} ]; then
+       cmd="$cmd | "
+    fi
+done
+
+eval $cmd
+

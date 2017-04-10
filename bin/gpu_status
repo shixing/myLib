@@ -1,0 +1,124 @@
+#!/usr/bin/env python
+# check the gpu usage in hpc
+
+
+import sys
+import subprocess as sp
+
+def co(cmd):
+    p = sp.Popen(cmd.split(),stdout=sp.PIPE)
+    out,err = p.communicate()
+    return out
+
+class node:
+    def __init__(self,lines):
+        d = {}
+        for line in lines[1:]:
+            ll =line.split()
+            d[ll[0]] = ll[2]
+        self.state = lines[1].split()[2]
+        self.prop = lines[3].split()[2].split(",")
+        if 'jobs' in d:
+            self.state = 'busy'
+        self.gpu = False
+        self.name = lines[0]
+        if 'gpu' in self.prop:
+            self.gpu = True
+        pass
+    
+def get_queue():
+    cmd = "qstat -Q"
+    out = co(cmd)
+    out = out.split('\n')[2:]
+    queue = []
+    for line in out:
+        if line == "":
+            continue
+        ll = line.split()
+        queue.append(ll[0])
+    return queue
+
+def newqf(queue):
+    cmd = "newqf {}".format(queue)
+    out = co(cmd)
+    out = out.split('\n')[1:-1]
+    out = [x for x in out if x.startswith('hpc')]
+    d = {}
+    state = {}
+    for line in out:
+        key = line[:7]
+        d[key] = line
+        ll = line.split()
+        s = ll[5]
+        if s == "free" or s == "offline" or s=='down':
+            state[key] = s
+        else:
+            state[key] = 'busy'
+    
+    # sort key
+    keys = d.keys()
+    keys = sorted(keys, key = lambda x: int(x[3:]))
+    
+    return d,state,keys
+
+def get_gpu_node():
+    cmd = 'pbsnodes'
+    out = co(cmd)
+    out = out.split("\n")
+    nodes = []
+    temp = []
+
+    for line in out:
+        if line == "":
+            if len(temp) > 0:
+                n = node(list(temp))
+                nodes.append(n)
+            temp = []
+        else:
+            temp.append(line)
+
+    gpu_nodes = set()
+    for n in nodes:
+        if n.gpu:
+            gpu_nodes.add(n.name)
+    
+    return gpu_nodes
+
+            
+def main():
+    
+
+    qn = "isi"
+    if len(sys.argv) == 2:
+        qn = sys.argv[1]
+    
+    l , state, keys = newqf(qn)
+    gpu_nodes = get_gpu_node()
+    
+    busy = 0
+    free = 0
+    offline = 0
+    down = 0
+    s = 0 
+    for key in keys:
+        if key in gpu_nodes:
+            ss = state[key]
+            if ss == 'busy':
+                busy += 1
+            if ss == 'free':
+                free += 1
+            if ss == 'offline':
+                offline += 1
+            if ss == 'down':
+                down += 1
+            s+=1
+            print l[key]
+
+    print "{:3d} x free + {:3d} x busy + {:3d} x offline + {:3d} x down = {:3d} total".format(free, busy, offline, down, s)
+    
+            
+
+if __name__ == '__main__':
+    main()
+                    
+    
